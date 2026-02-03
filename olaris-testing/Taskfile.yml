@@ -1,0 +1,12 @@
+version: '3'
+
+vars:
+  DOMAIN: ''
+
+
+tasks:
+  test:
+    desc: Run Nuvolaris tests for k3s with a wildcard domain
+    cmds:
+      - test -n "{{.DOMAIN}}" || (echo "DOMAIN is required (example: *.example.com)" && exit 1)
+      - ./run.sh "{{.DOMAIN}}"
