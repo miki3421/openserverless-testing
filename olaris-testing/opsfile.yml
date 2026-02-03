@@ -1,0 +1,35 @@
+version: 3
+
+vars:
+  P:
+    sh: echo $(ops -opspath "$PWD")
+  APIHOST:
+    sh: |
+      if test -n "{{._apihost_}}"
+      then echo "{{._apihost_}}"
+      elif test -n "$APIHOST"
+      then echo "$APIHOST"
+      else
+        wsk property get --apihost | awk '/whisk API host/{print $4}'
+      fi
+  VERBOSE:
+    sh: |
+      if {{.__verbose}}
+      then echo "true"
+      else echo "false"
+      fi
+
+dotenv:
+  - "{{.P}}/.env"
+
+tasks:
+  run:
+    desc: Run Nuvolaris tests for a given API host or wildcard domain
+    silent: true
+    cmds:
+      - test -n "{{.APIHOST}}" || (echo "APIHOST is required" && exit 1)
+      - |
+        if test "{{.VERBOSE}}" = "true"
+        then OPS_TEST_VERBOSE=1 ./run.sh "{{.APIHOST}}"
+        else ./run.sh "{{.APIHOST}}"
+        fi

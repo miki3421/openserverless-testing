@@ -77,6 +77,88 @@ match_q() {
   fi
 }
 
+tcp_check() {
+  local host="$1"
+  local port="$2"
+  (exec 3<>"/dev/tcp/${host}/${port}") >/dev/null 2>&1
+}
+
+parse_host_port() {
+  local url="$1"
+  local no_scheme="${url#http://}"
+  no_scheme="${no_scheme#https://}"
+  no_scheme="${no_scheme%%/*}"
+  local host="${no_scheme%%:*}"
+  local port="${no_scheme##*:}"
+  if [ "$host" = "$port" ]; then
+    port=""
+  fi
+  echo "$host" "$port"
+}
+
+ensure_k8s_connectivity() {
+  local server
+  server="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+  if [ -z "$server" ]; then
+    echo "Warning: unable to read Kubernetes server from kubeconfig."
+    return 1
+  fi
+
+  local host port
+  read -r host port < <(parse_host_port "$server")
+  if [ -z "$port" ]; then
+    port=443
+  fi
+
+  if tcp_check "$host" "$port"; then
+    echo "Kubernetes API reachable: $host:$port"
+    return 0
+  fi
+
+  if [ "$host" = "127.0.0.1" ] || [ "$host" = "localhost" ]; then
+    if [ -z "${SSH_TUNNEL_HOST:-}" ]; then
+      echo "Kubernetes API not reachable on $host:$port."
+      echo "Set SSH_TUNNEL_HOST (and optionally SSH_TUNNEL_USER, SSH_TUNNEL_KEY) to create a tunnel."
+      return 1
+    fi
+
+    local ssh_target="$SSH_TUNNEL_HOST"
+    if [ -n "${SSH_TUNNEL_USER:-}" ]; then
+      ssh_target="${SSH_TUNNEL_USER}@${SSH_TUNNEL_HOST}"
+    fi
+
+    local ssh_opts=("-o" "ExitOnForwardFailure=yes")
+    if [ -n "${SSH_TUNNEL_KEY:-}" ]; then
+      ssh_opts+=("-i" "$SSH_TUNNEL_KEY")
+    fi
+
+    echo "Opening SSH tunnel for Kubernetes API: localhost:${port} -> ${SSH_TUNNEL_HOST}:${port}"
+    ssh -f -N -L "${port}:localhost:${port}" "${ssh_opts[@]}" "$ssh_target" || return 1
+
+    if tcp_check "$host" "$port"; then
+      echo "SSH tunnel established for Kubernetes API."
+      return 0
+    fi
+  fi
+
+  echo "Kubernetes API not reachable: $host:$port"
+  return 1
+}
+
+ensure_apihost_connectivity() {
+  local host port
+  read -r host port < <(parse_host_port "$APIHOST_INPUT")
+  if [ -z "$port" ]; then
+    port=443
+  fi
+  if tcp_check "$host" "$port"; then
+    echo "API host reachable: $host:$port"
+    return 0
+  fi
+  echo "API host not reachable: $host:$port"
+  return 1
+}
+
 config_has_key() {
   if [ -z "$CONFIG_STATUS" ]; then
     return 1
@@ -120,10 +202,15 @@ else
   echo "Warning: unable to read ops config status. Tests will run best-effort."
 fi
 
-if ops setup nuvolaris status >/dev/null 2>&1; then
-  echo "ops setup nuvolaris status:"
-  ops setup nuvolaris status || true
+if [ "${OPS_TEST_VERBOSE:-0}" = "1" ]; then
+  if ops setup nuvolaris status >/dev/null 2>&1; then
+    echo "ops setup nuvolaris status:"
+    ops setup nuvolaris status || true
+  fi
 fi
+
+ensure_apihost_connectivity || true
+ensure_k8s_connectivity || true
 
 wsk_admin() {
   ops -wsk --apihost "$APIHOST_CM" --auth "$ADMIN_AUTH" "$@"
@@ -147,15 +234,19 @@ run_test() {
   local name="$1"
   shift
   echo "==> Running test: $name"
-  if "$@"; then
+  local log="/tmp/ops-test-${name// /_}.log"
+  "$@" 2>&1 | tee "$log"
+  local status="${PIPESTATUS[0]}"
+  if [ "$status" -eq 0 ]; then
     TEST_STATUS["$name"]=0
   else
-    local code=$?
-    if [ "$code" -eq 2 ]; then
+    if [ "$status" -eq 2 ]; then
       TEST_STATUS["$name"]=2
     else
       TEST_STATUS["$name"]=1
     fi
+    echo "Test failed: $name. Last output:"
+    tail -n 20 "$log" || true
   fi
 }
 
@@ -245,10 +336,12 @@ create_user() {
   local user="$1"
   local pass="$2"
   shift 2
-  if ops admin adduser "$user" "$user@email.com" "$pass" "$@" | match_q "whiskuser.nuvolaris.org/$user created"; then
+  if ops admin adduser "$user" "$user@email.com" "$pass" "$@" 2>&1 | tee /tmp/ops-adduser.log | match_q "whiskuser.nuvolaris.org/$user created"; then
     kubectl -n nuvolaris wait --for=condition=ready "wsku/$user" --timeout=120s >/dev/null 2>&1
     return 0
   fi
+  echo "adduser failed for $user. Last output:"
+  tail -n 20 /tmp/ops-adduser.log || true
   return 1
 }
 
@@ -268,7 +361,9 @@ check_login() {
   if [ -n "$(get_cm '{.metadata.annotations.mongodb_url}')" ]; then
     flags+=("--mongodb")
   fi
-  if [ -n "$(get_cm '{.metadata.annotations.s3_access_key}')" ]; then
+  if config_has_key MINIO && ! config_enabled MINIO; then
+    :
+  elif [ -n "$(get_cm '{.metadata.annotations.s3_access_key}')" ]; then
     flags+=("--minio")
   fi
   if [ -n "$(get_cm '{.metadata.annotations.postgres_url}')" ]; then
