@@ -332,6 +332,19 @@ check_sys_minio() {
   wsk_admin action invoke hello/minio -r | match_q "$s3_bucket"
 }
 
+check_seaweedfs() {
+  if [ -z "$BASE_DOMAIN" ]; then
+    return 2
+  fi
+  local s3_host="s3.${BASE_DOMAIN}"
+  local code
+  code="$(curl -sS -o /dev/null -w "%{http_code}" "https://${s3_host}" || true)"
+  if [ "$code" = "000" ] || [ -z "$code" ]; then
+    return 1
+  fi
+  return 0
+}
+
 create_user() {
   local user="$1"
   local pass="$2"
@@ -597,6 +610,7 @@ run_test "Sys Redis" check_sys_redis
 run_test "Sys FerretDB" check_sys_mongodb
 run_test "Sys Postgres" check_sys_postgres
 run_test "Sys Minio" check_sys_minio
+run_test "SeaweedFS" check_seaweedfs
 run_test "Login" check_login
 run_test "Statics" check_static
 run_test "User Redis" check_user_redis
@@ -613,6 +627,7 @@ K3S_SYS_REDIS="$(status_symbol "${TEST_STATUS[Sys Redis]:-1}")"
 K3S_SYS_FERRET="$(status_symbol "${TEST_STATUS[Sys FerretDB]:-1}")"
 K3S_SYS_PG="$(status_symbol "${TEST_STATUS[Sys Postgres]:-1}")"
 K3S_SYS_MINIO="$(status_symbol "${TEST_STATUS[Sys Minio]:-1}")"
+K3S_SEAWEEDFS="$(status_symbol "${TEST_STATUS[SeaweedFS]:-1}")"
 K3S_LOGIN="$(status_symbol "${TEST_STATUS[Login]:-1}")"
 K3S_STATIC="$(status_symbol "${TEST_STATUS[Statics]:-1}")"
 K3S_USER_REDIS="$(status_symbol "${TEST_STATUS[User Redis]:-1}")"
@@ -633,15 +648,16 @@ cat <<TABLE
 |4a|Sys FerretDB   | $K3S_SYS_FERRET |
 |4b|Sys Postgres   | $K3S_SYS_PG |
 |5 |Sys Minio      | $K3S_SYS_MINIO |
-|6 |Login          | $K3S_LOGIN |
-|7 |Statics        | $K3S_STATIC |
-|8 |User Redis     | $K3S_USER_REDIS |
-|9a|User FerretDB  | $K3S_USER_FERRET |
-|9b|User Postgres  | $K3S_USER_PG |
-|10|User Minio     | $K3S_USER_MINIO |
-|11|Nuv Win        | $K3S_NUV_WIN |
-|12|Nuv Mac        | $K3S_NUV_MAC |
-|14|Runtimes       | $K3S_RUNTIMES |
+|6 |SeaweedFS      | $K3S_SEAWEEDFS |
+|7 |Login          | $K3S_LOGIN |
+|8 |Statics        | $K3S_STATIC |
+|9 |User Redis     | $K3S_USER_REDIS |
+|10|User FerretDB  | $K3S_USER_FERRET |
+|11|User Postgres  | $K3S_USER_PG |
+|12|User Minio     | $K3S_USER_MINIO |
+|13|Nuv Win        | $K3S_NUV_WIN |
+|14|Nuv Mac        | $K3S_NUV_MAC |
+|15|Runtimes       | $K3S_RUNTIMES |
 TABLE
 
 if [ "$APIHOST_CM" != "$APIHOST_INPUT" ]; then
