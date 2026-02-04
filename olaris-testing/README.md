@@ -1,36 +1,35 @@
 # olaris-testing
 
-Client per testare una installazione Nuvolaris su k3s usando un dominio wildcard.
+Client to test a Nuvolaris installation on k3s using a wildcard domain.
 
-## Requisiti
-- `kubectl` configurato per il cluster k3s
-- `ops` nel PATH
-- accesso al namespace `nuvolaris`
- - connettività TCP verso:
-   - API host pubblico su `443`
-   - API server Kubernetes (tipicamente `6443`)
- - opzionale: `.env` con `APIHOST` e/o tunnel SSH
+## Requirements
+- `kubectl` configured for the k3s cluster
+- `ops` in PATH
+- access to the `nuvolaris` namespace
+- TCP connectivity to:
+  - public API host on `443`
+  - Kubernetes API server (typically `6443`)
+- optional: `.env` with `APIHOST` and/or SSH tunnel variables
 
-## Esecuzione
+## Run
 
 ```bash
 ./olaris-testing/run.sh "*.example.com"
 ```
 
-Output: tabella di stato come nel README principale, con la colonna K3S popolata.
+Output: status table (K3S column populated) matching the main README.
 
 ## Ops task
-Se `ops testing run` legge `opsfile.yml` dalla directory corrente:
+If `ops testing run` reads `opsfile.yml` from the current directory:
 
 ```bash
 cd /root/Testing/olaris-testing
 ops testing run "https://49.13.136.198.nip.io"
 ```
 
-
-## Note
-- I test `Nuv Win` e `Nuv Mac` sono marcati `N/A` (richiedono ambienti Windows/Mac).
-- Se un componente non è installato (es. Redis, MongoDB, Postgres, Minio), il relativo test viene marcato `N/A`.
-- Se il kubeconfig punta a `localhost:6443` e non è raggiungibile, puoi creare un tunnel SSH impostando:
+## Notes
+- `Nuv Win` and `Nuv Mac` are reported as `N/A` (require Windows/Mac environments).
+- If a component is not installed (Redis, MongoDB, Postgres, Minio), the corresponding test is `N/A`.
+- If kubeconfig points to `localhost:6443` and it is not reachable, you can create an SSH tunnel by setting:
   - `SSH_TUNNEL_HOST`
-  - opzionali: `SSH_TUNNEL_USER`, `SSH_TUNNEL_KEY`
+  - optional: `SSH_TUNNEL_USER`, `SSH_TUNNEL_KEY`
