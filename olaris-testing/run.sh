@@ -332,6 +332,64 @@ check_sys_minio() {
   wsk_admin action invoke hello/minio -r | match_q "$s3_bucket"
 }
 
+check_static_backend() {
+  if config_has_key STATIC && ! config_enabled STATIC; then
+    return 2
+  fi
+  if kubectl -n nuvolaris get svc/nuvolaris-static-svc >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+check_pods_for_enabled_components() {
+  local missing=0
+  local pods
+  pods="$(kubectl -n nuvolaris get pods --no-headers 2>/dev/null || true)"
+
+  require_pod() {
+    local name="$1"
+    local pattern="$2"
+    if ! echo "$pods" | rg -q "$pattern"; then
+      echo "Missing pod for ${name}: ${pattern}"
+      missing=1
+    fi
+  }
+
+  require_pod "operator" "^nuvolaris-operator-"
+  require_pod "controller" "^controller-"
+
+  if config_enabled REDIS; then
+    require_pod "redis" "^redis-"
+  fi
+  if config_enabled MONGODB; then
+    require_pod "mongodb" "^nuvolaris-mongodb-"
+  fi
+  if config_enabled POSTGRES; then
+    require_pod "postgres" "^nuvolaris-postgres-"
+  fi
+  if config_enabled ETCD; then
+    require_pod "etcd" "^nuvolaris-etcd-"
+  fi
+  if config_enabled REGISTRY; then
+    require_pod "registry" "^registry-"
+  fi
+  if config_enabled SEAWEEDFS; then
+    require_pod "seaweedfs" "^seaweedfs-"
+  fi
+  if config_enabled MILVUS; then
+    require_pod "milvus" "^nuvolaris-milvus-"
+  fi
+  if config_enabled STATIC; then
+    require_pod "static" "^nuvolaris-static-"
+  fi
+
+  if [ "$missing" -ne 0 ]; then
+    return 1
+  fi
+  return 0
+}
+
 check_seaweedfs() {
   if [ -z "$BASE_DOMAIN" ]; then
     return 2
@@ -611,6 +669,8 @@ run_test "Sys FerretDB" check_sys_mongodb
 run_test "Sys Postgres" check_sys_postgres
 run_test "Sys Minio" check_sys_minio
 run_test "SeaweedFS" check_seaweedfs
+run_test "Static Backend" check_static_backend
+run_test "Core Pods" check_pods_for_enabled_components
 run_test "Login" check_login
 run_test "Statics" check_static
 run_test "User Redis" check_user_redis
@@ -628,6 +688,8 @@ K3S_SYS_FERRET="$(status_symbol "${TEST_STATUS[Sys FerretDB]:-1}")"
 K3S_SYS_PG="$(status_symbol "${TEST_STATUS[Sys Postgres]:-1}")"
 K3S_SYS_MINIO="$(status_symbol "${TEST_STATUS[Sys Minio]:-1}")"
 K3S_SEAWEEDFS="$(status_symbol "${TEST_STATUS[SeaweedFS]:-1}")"
+K3S_STATIC_BACKEND="$(status_symbol "${TEST_STATUS[Static Backend]:-1}")"
+K3S_CORE_PODS="$(status_symbol "${TEST_STATUS[Core Pods]:-1}")"
 K3S_LOGIN="$(status_symbol "${TEST_STATUS[Login]:-1}")"
 K3S_STATIC="$(status_symbol "${TEST_STATUS[Statics]:-1}")"
 K3S_USER_REDIS="$(status_symbol "${TEST_STATUS[User Redis]:-1}")"
@@ -649,15 +711,17 @@ cat <<TABLE
 |4b|Sys Postgres   | $K3S_SYS_PG |
 |5 |Sys Minio      | $K3S_SYS_MINIO |
 |6 |SeaweedFS      | $K3S_SEAWEEDFS |
-|7 |Login          | $K3S_LOGIN |
-|8 |Statics        | $K3S_STATIC |
-|9 |User Redis     | $K3S_USER_REDIS |
-|10|User FerretDB  | $K3S_USER_FERRET |
-|11|User Postgres  | $K3S_USER_PG |
-|12|User Minio     | $K3S_USER_MINIO |
-|13|Nuv Win        | $K3S_NUV_WIN |
-|14|Nuv Mac        | $K3S_NUV_MAC |
-|15|Runtimes       | $K3S_RUNTIMES |
+|7 |Static Backend | $K3S_STATIC_BACKEND |
+|8 |Core Pods      | $K3S_CORE_PODS |
+|9 |Login          | $K3S_LOGIN |
+|10|Statics        | $K3S_STATIC |
+|11|User Redis     | $K3S_USER_REDIS |
+|12|User FerretDB  | $K3S_USER_FERRET |
+|13|User Postgres  | $K3S_USER_PG |
+|14|User Minio     | $K3S_USER_MINIO |
+|15|Nuv Win        | $K3S_NUV_WIN |
+|16|Nuv Mac        | $K3S_NUV_MAC |
+|17|Runtimes       | $K3S_RUNTIMES |
 TABLE
 
 if [ "$APIHOST_CM" != "$APIHOST_INPUT" ]; then
