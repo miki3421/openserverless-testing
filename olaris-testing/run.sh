@@ -2,49 +2,59 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$PWD"
 
-export OPS_BRANCH=main
+OPS_BRANCH="${OPS_BRANCH:-main}"
+export OPS_BRANCH
 
 usage() {
-  echo "Usage: $0 '*.example.com'"
-  echo "";
+  echo "Usage: $0 [--clean] '<apihost-or-*.domain>'"
+  echo ""
   echo "Input domain format: *.yourdomain"
 }
 
-if [ "${1:-}" = "" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  usage
-  exit 1
+MODE="run"
+if [ "${1:-}" = "--clean" ] || [ "${1:-}" = "clean" ]; then
+  MODE="clean"
+  shift
 fi
 
-DOMAIN_RAW="$1"
+DOMAIN_RAW="${1:-}"
 APIHOST_INPUT=""
 HOST=""
 BASE_DOMAIN=""
 
-if [[ "$DOMAIN_RAW" =~ ^https?:// ]]; then
-  APIHOST_INPUT="$DOMAIN_RAW"
-  HOST="${DOMAIN_RAW#http://}"
-  HOST="${HOST#https://}"
-elif [[ "$DOMAIN_RAW" == \*.* ]]; then
-  BASE_DOMAIN="${DOMAIN_RAW#*.}"
-  HOST="api.${BASE_DOMAIN}"
-  APIHOST_INPUT="https://${HOST}"
-else
-  HOST="$DOMAIN_RAW"
-  APIHOST_INPUT="https://${HOST}"
-fi
-
-if [ -z "$BASE_DOMAIN" ]; then
-  if [[ "$HOST" == api.* ]]; then
-    BASE_DOMAIN="${HOST#api.}"
-  else
-    BASE_DOMAIN="$HOST"
+if [ "$MODE" = "run" ]; then
+  if [ "$DOMAIN_RAW" = "" ] || [ "$DOMAIN_RAW" = "-h" ] || [ "$DOMAIN_RAW" = "--help" ]; then
+    usage
+    exit 1
   fi
-fi
 
-if ! [[ "$HOST" =~ ^[A-Za-z0-9.-]+$ ]] || ! [[ "$BASE_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
-  echo "Invalid domain: $DOMAIN_RAW"
-  exit 1
+  if [[ "$DOMAIN_RAW" =~ ^https?:// ]]; then
+    APIHOST_INPUT="$DOMAIN_RAW"
+    HOST="${DOMAIN_RAW#http://}"
+    HOST="${HOST#https://}"
+  elif [[ "$DOMAIN_RAW" == \*.* ]]; then
+    BASE_DOMAIN="${DOMAIN_RAW#*.}"
+    HOST="api.${BASE_DOMAIN}"
+    APIHOST_INPUT="https://${HOST}"
+  else
+    HOST="$DOMAIN_RAW"
+    APIHOST_INPUT="https://${HOST}"
+  fi
+
+  if [ -z "$BASE_DOMAIN" ]; then
+    if [[ "$HOST" == api.* ]]; then
+      BASE_DOMAIN="${HOST#api.}"
+    else
+      BASE_DOMAIN="$HOST"
+    fi
+  fi
+
+  if ! [[ "$HOST" =~ ^[A-Za-z0-9.-]+$ ]] || ! [[ "$BASE_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "Invalid domain: $DOMAIN_RAW"
+    exit 1
+  fi
 fi
 
 need_cmd() {
@@ -181,20 +191,70 @@ get_ctrl() {
   kubectl -n nuvolaris get wsk/controller -o jsonpath="$1" 2>/dev/null
 }
 
-APIHOST_CM="$(get_cm '{.metadata.annotations.apihost}')"
-if [ -z "$APIHOST_CM" ]; then
-  echo "Unable to read apihost from cluster config. Is nuvolaris installed?"
-  exit 1
-fi
+is_slim_cluster() {
+  if [ -z "$CONFIG_STATUS" ]; then
+    return 1
+  fi
+  echo "$CONFIG_STATUS" | grep -Eqi '(^|[= _-])slim($|[ ,_-])'
+}
 
-ADMIN_AUTH="$(get_ctrl '{.spec.openwhisk.namespaces.nuvolaris}')"
-ADMIN_PASS="$(get_ctrl '{.spec.nuvolaris.password}')"
-if [ -z "$ADMIN_AUTH" ] || [ -z "$ADMIN_PASS" ]; then
-  echo "Unable to read admin credentials from wsk/controller."
-  exit 1
-fi
+check_prerequisites() {
+  local failed=0
 
+  if [ "$OPS_BRANCH" != "main" ]; then
+    echo "Prerequisite failed: OPS_BRANCH must be 'main' (current: $OPS_BRANCH)."
+    failed=1
+  fi
+
+  local ops_config_file="${HOME}/.ops/tmp/config"
+  local kube_config_file="${HOME}/.kube/config"
+  if [ ! -f "$ops_config_file" ] && [ ! -f "$kube_config_file" ]; then
+    echo "Prerequisite failed: missing config file '$ops_config_file' (fallback '$kube_config_file' not found)."
+    failed=1
+  fi
+
+  local configured_apihost
+  configured_apihost="$(ops config apihost 2>/dev/null || true)"
+  if [ -z "$configured_apihost" ]; then
+    echo "Prerequisite failed: 'ops config apihost' is not configured."
+    failed=1
+  fi
+
+  if is_slim_cluster; then
+    local slim_conf
+    slim_conf="$(ops config slim 2>/dev/null || ops config smil 2>/dev/null || true)"
+    if [ -z "$slim_conf" ]; then
+      echo "Prerequisite failed: slim cluster detected, but neither 'ops config slim' nor 'ops config smil' is configured."
+      failed=1
+    fi
+  fi
+
+  if [ "$failed" -ne 0 ]; then
+    exit 1
+  fi
+}
+
+APIHOST_CM=""
+ADMIN_AUTH=""
+ADMIN_PASS=""
 ADMIN_USER="nuvolaris"
+
+load_cluster_auth() {
+  APIHOST_CM="$(get_cm '{.metadata.annotations.apihost}')"
+  ADMIN_AUTH="$(get_ctrl '{.spec.openwhisk.namespaces.nuvolaris}')"
+  ADMIN_PASS="$(get_ctrl '{.spec.nuvolaris.password}')"
+}
+
+require_cluster_auth() {
+  if [ -z "$APIHOST_CM" ]; then
+    echo "Unable to read apihost from cluster config. Is nuvolaris installed?"
+    exit 1
+  fi
+  if [ -z "$ADMIN_AUTH" ] || [ -z "$ADMIN_PASS" ]; then
+    echo "Unable to read admin credentials from wsk/controller."
+    exit 1
+  fi
+}
 
 if [ -n "$CONFIG_STATUS" ]; then
   echo "ops config status detected. Tests will be aligned to enabled components."
@@ -202,14 +262,25 @@ else
   echo "Warning: unable to read ops config status. Tests will run best-effort."
 fi
 
-if [ "${OPS_TEST_VERBOSE:-0}" = "1" ]; then
+if [ "$MODE" = "run" ]; then
+  check_prerequisites
+fi
+load_cluster_auth
+
+if [ "$MODE" = "run" ]; then
+  require_cluster_auth
+fi
+
+if [ "$MODE" = "run" ] && [ "${OPS_TEST_VERBOSE:-0}" = "1" ]; then
   if ops setup nuvolaris status >/dev/null 2>&1; then
     echo "ops setup nuvolaris status:"
     ops setup nuvolaris status || true
   fi
 fi
 
-ensure_apihost_connectivity || true
+if [ "$MODE" = "run" ]; then
+  ensure_apihost_connectivity || true
+fi
 ensure_k8s_connectivity || true
 
 wsk_admin() {
@@ -390,17 +461,101 @@ check_pods_for_enabled_components() {
   return 0
 }
 
+DEMO_USERS_FILE="/tmp/ops-testing-demo-users-$$.txt"
+touch "$DEMO_USERS_FILE"
+
+register_demo_user() {
+  local user="$1"
+  if [ -n "$user" ]; then
+    echo "$user" >>"$DEMO_USERS_FILE"
+  fi
+}
+
+detect_seaweedfs_protocol() {
+  local protocol=""
+  local url_line
+  url_line="$(echo "$CONFIG_STATUS" | grep -E 'SEAWEEDFS.*https?://' | head -n 1 || true)"
+  if [[ "$url_line" == *"https://"* ]]; then
+    protocol="https"
+  elif [[ "$url_line" == *"http://"* ]]; then
+    protocol="http"
+  fi
+
+  if [ -z "$protocol" ]; then
+    if echo "$CONFIG_STATUS" | grep -Eq 'SEAWEEDFS(_|).*PROTOCOL=https'; then
+      protocol="https"
+    elif echo "$CONFIG_STATUS" | grep -Eq 'SEAWEEDFS(_|).*PROTOCOL=http'; then
+      protocol="http"
+    fi
+  fi
+
+  if [ -z "$protocol" ]; then
+    echo "SeaweedFS protocol not found in ops config status, fallback to http." >&2
+    protocol="http"
+  fi
+
+  echo "$protocol"
+}
+
 check_seaweedfs() {
   if [ -z "$BASE_DOMAIN" ]; then
     return 2
   fi
   local s3_host="s3.${BASE_DOMAIN}"
+  local protocol
+  protocol="$(detect_seaweedfs_protocol)"
+  echo "SeaweedFS check protocol: $protocol"
   local code
-  code="$(curl -sS -o /dev/null -w "%{http_code}" "https://${s3_host}" || true)"
+  code="$(curl -sS -o /dev/null -w "%{http_code}" "${protocol}://${s3_host}" || true)"
   if [ "$code" = "000" ] || [ -z "$code" ]; then
     return 1
   fi
   return 0
+}
+
+delete_demo_user() {
+  local user="$1"
+  [ -z "$user" ] && return 0
+
+  if ops admin deluser "$user" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ops admin rmuser "$user" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  kubectl -n nuvolaris delete "wsku/${user}" --ignore-not-found >/dev/null 2>&1 || true
+  return 0
+}
+
+cleanup_demo_users() {
+  local users_from_cluster
+  users_from_cluster="$(kubectl -n nuvolaris get wsku -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+
+  (
+    cat "$DEMO_USERS_FILE" 2>/dev/null || true
+    echo "$users_from_cluster"
+  ) | sort -u | while read -r user; do
+    if [[ "$user" =~ ^(demouser|demostaticuser|demoredisuser|demomongouser|demopguser|demominiouser|testactionuser)[a-z]+$ ]]; then
+      delete_demo_user "$user"
+    fi
+  done
+}
+
+cleanup_admin_artifacts() {
+  if [ -z "$APIHOST_CM" ] || [ -z "$ADMIN_AUTH" ]; then
+    return 0
+  fi
+  wsk_admin package delete hello >/dev/null 2>&1 || true
+}
+
+clean_all() {
+  echo "==> Running clean task"
+  cleanup_admin_artifacts || true
+  cleanup_demo_users || true
+  rm -f "$DEMO_USERS_FILE" >/dev/null 2>&1 || true
+  echo "==> Clean task completed"
 }
 
 create_user() {
@@ -408,6 +563,7 @@ create_user() {
   local pass="$2"
   shift 2
   if ops admin adduser "$user" "$user@email.com" "$pass" "$@" 2>&1 | tee /tmp/ops-adduser.log | match_q "whiskuser.nuvolaris.org/$user created"; then
+    register_demo_user "$user"
     kubectl -n nuvolaris wait --for=condition=ready "wsku/$user" --timeout=120s >/dev/null 2>&1
     return 0
   fi
@@ -661,7 +817,22 @@ check_runtimes() {
 }
 
 declare -A TEST_STATUS
+TESTS_STARTED=0
 
+on_exit() {
+  if [ "$MODE" = "run" ] && [ "$TESTS_STARTED" -eq 1 ]; then
+    clean_all
+  fi
+}
+
+trap on_exit EXIT
+
+if [ "$MODE" = "clean" ]; then
+  clean_all
+  exit 0
+fi
+
+TESTS_STARTED=1
 run_test "Deploy" check_deploy
 run_test "SSL" check_ssl
 run_test "Sys Redis" check_sys_redis

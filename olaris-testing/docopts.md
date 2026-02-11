@@ -7,12 +7,14 @@ Run Nuvolaris test suite against a K3S installation.
 ```text
 Usage:
     testing run [<apihost>] [--verbose]
+    testing clean
 ```
 
 ## Commands
 
 ```
   testing run   execute tests against the given API host or wildcard domain
+  testing clean remove demo users/artifacts created by tests
 ```
 
 ## Options
@@ -42,4 +44,7 @@ ops testing run https://49.13.136.198.nip.io
 
 # Verbose mode (prints ops setup nuvolaris status)
 ops testing run --verbose
+
+# Cleanup demo objects on demand
+ops testing clean
 ```

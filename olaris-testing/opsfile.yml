@@ -33,3 +33,8 @@ tasks:
         then OPS_TEST_VERBOSE=1 ./run.sh "{{.APIHOST}}"
         else ./run.sh "{{.APIHOST}}"
         fi
+  clean:
+    desc: Remove demo objects created by tests
+    silent: true
+    cmds:
+      - ./run.sh --clean
