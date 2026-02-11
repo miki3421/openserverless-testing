@@ -16,3 +16,4 @@ Tutte le modifiche al progetto devono essere registrate in questo file come chan
 - Implementati prerequisiti in `run.sh` per test run: `OPS_BRANCH=main`, `ops config apihost`, file `.ops/tmp/config`, check `ops config slim/smil` se cluster slim.
 - Aggiornata documentazione comandi in `docopts.md` aggiungendo `ops testing clean`.
 - Fix prerequisito config in `run.sh`: percorso corretto su `$HOME/.ops/tmp/config` con fallback a `$HOME/.kube/config`.
+- Fix prerequisito apihost in `run.sh`: validazione su `OPERATOR_CONFIG_APIHOST` da `ops config status` (con fallback `ops -config OPERATOR_CONFIG_APIHOST`).

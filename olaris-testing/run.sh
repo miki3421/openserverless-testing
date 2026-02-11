@@ -214,9 +214,12 @@ check_prerequisites() {
   fi
 
   local configured_apihost
-  configured_apihost="$(ops config apihost 2>/dev/null || true)"
+  configured_apihost="$(echo "$CONFIG_STATUS" | sed -n 's/^OPERATOR_CONFIG_APIHOST=//p' | head -n 1)"
   if [ -z "$configured_apihost" ]; then
-    echo "Prerequisite failed: 'ops config apihost' is not configured."
+    configured_apihost="$(ops -config OPERATOR_CONFIG_APIHOST 2>/dev/null || true)"
+  fi
+  if [ -z "$configured_apihost" ]; then
+    echo "Prerequisite failed: 'ops config apihost' is not configured (OPERATOR_CONFIG_APIHOST missing)."
     failed=1
   fi
 
