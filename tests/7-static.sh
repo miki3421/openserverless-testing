@@ -15,10 +15,12 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TYPE="${1:?test type}"
 TYPE="$(echo $TYPE | awk -F- '{print $1}')"
 
-ops config disable --minio
 ops config enable --seaweedfs --static
 ops update apply
 
@@ -47,32 +49,27 @@ API_DOMAIN=$(ops debug apihost | awk '/whisk API host/{print $4}' | awk -F[/:] '
 
 if [ "$TYPE" = "osh" ]; then
     ops debug kube wait OBJECT=route.route.openshift.io/$user-static-route JSONPATH="{.status.ingress[0].host}"
-else
+elif [ "$TYPE" != "kind" ]; then
     ops debug kube wait OBJECT=ingress/$user-static-ingress JSONPATH="{.status.loadBalancer.ingress[0]}"
 fi
+# Kind exposes ingress through NodePort/host mappings; it need not publish a
+# LoadBalancer address. The HTTP check below verifies that the route is usable.
 
-case "$TYPE" in
-kind)
-    echo SUCCESS STATIC FOR LOCALHOST IS SKIPPED
-    ;;
-*)
-    STATIC_URL=$API_PROTOCOL://$user.$API_DOMAIN
-    echo "testing using $STATIC_URL"
-    N=0
-    RES=false
-    while [[ $N -lt 12 ]]
-    do 
-        if curl $STATIC_URL | grep " Welcome to Apache OpenServerless (incubating) static content distributor landing page!!!"; then            
-            echo SUCCESS STATIC
-            RES=true; break
-        else
-            echo "$((N++)) FAIL STATIC. WAITING FOR 5 SECONDS..."
-            sleep 5
-        fi
-    done
-
-    if [[ $RES = false ]]; then
-        exit 1
-    fi    
-    ;;
-esac
+# Use the exact default content distributed by the running operator. This also
+# rejects a generic gateway/login/error HTML page returned with HTTP 200.
+STATIC_CHECK_DIR=$(mktemp -d)
+trap 'rm -rf "$STATIC_CHECK_DIR"' EXIT
+OPERATOR_POD=$(kubectl -n openserverless get pods -l name=openserverless-operator \
+    -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$OPERATOR_POD" ]; then
+    echo "FAIL STATIC: operator pod unavailable for the reference content"
+    exit 1
+fi
+kubectl -n openserverless exec "$OPERATOR_POD" -- \
+    cat /home/openserverless/deploy/content/index.html > "$STATIC_CHECK_DIR/expected.html"
+if [ ! -s "$STATIC_CHECK_DIR/expected.html" ]; then
+    echo "FAIL STATIC: reference landing page is empty"
+    exit 1
+fi
+STATIC_URL="$API_PROTOCOL://$user.$API_DOMAIN/"
+bash "$SCRIPT_DIR/static-http-check.sh" "$STATIC_URL" "$STATIC_CHECK_DIR/expected.html"
